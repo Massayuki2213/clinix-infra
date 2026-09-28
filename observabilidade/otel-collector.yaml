@@ -1,0 +1,53 @@
+# OpenTelemetry Collector: recebe traces, métricas e logs da API via OTLP e
+# distribui cada sinal ao seu backend. A aplicação só conhece o coletor:
+# trocar Tempo/Loki/Prometheus por outro fornecedor é mudança só aqui.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Protege o coletor de picos: descarta dados antes de estourar a memória.
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+  batch: {}
+
+exporters:
+  otlp_grpc/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  otlp_http/loki:
+    endpoint: http://loki:3100/otlp
+  # O Prometheus faz scrape deste endpoint (modelo pull).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # Atributos do recurso que viram rótulos em todas as métricas.
+    resource_constant_labels:
+      included: [service.name, service.version, deployment.environment.name]
+    enable_open_metrics: true
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_grpc/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/loki]

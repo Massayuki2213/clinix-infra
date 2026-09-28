@@ -1,0 +1,141 @@
+# Clinix completo: aplicação + banco + observabilidade.
+#
+#   cp .env.example .env         # defina JWT_SECRET
+#   docker compose up --build    # app em http://localhost:8800, Grafana em http://localhost:3300
+#
+# Espera os repositórios clinix-backend e clinix-frontend ao lado deste
+# (caminhos configuráveis em CAMINHO_BACKEND e CAMINHO_FRONTEND).
+
+name: clinix
+
+# Telemetria da API: tudo vai por OTLP para o coletor, que distribui para
+# Tempo (traces), Prometheus (métricas) e Loki (logs).
+x-telemetria: &telemetria
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_SERVICE_NAME: clinix-api
+  OTEL_SEMCONV_STABILITY_OPT_IN: http
+
+services:
+  # ── Aplicação ────────────────────────────────────────────────────────────
+  web:
+    build: ${CAMINHO_FRONTEND:-../clinix-frontend/clinix}
+    environment:
+      API_URL: http://api:3000
+    ports:
+      - ${PORTA_WEB:-8800}:80
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    build: ${CAMINHO_BACKEND:-../clinix-backend}
+    environment:
+      <<: *telemetria
+      NODE_ENV: production
+      BANCO: postgres
+      DATABASE_URL: postgres://clinix:${POSTGRES_PASSWORD:-clinix}@db:5432/clinix
+      JWT_SECRET: ${JWT_SECRET:?Defina JWT_SECRET no arquivo .env (mínimo 32 caracteres)}
+      SEMEAR_DEMONSTRACAO: "true"
+      CORS_ORIGINS: http://localhost:${PORTA_WEB:-8800}
+      # Ambiente de demonstração: o teste de carga faz muitos logins do mesmo IP.
+      LOGIN_RATE_LIMIT: "100000"
+    ports:
+      - ${PORTA_API:-8801}:3000 # Swagger em /api-docs
+    depends_on:
+      db:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: clinix
+      POSTGRES_USER: clinix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clinix}
+    volumes:
+      - dados-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clinix -d clinix"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ── Observabilidade ──────────────────────────────────────────────────────
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./observabilidade/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - tempo
+      - loki
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      # Recebe as métricas derivadas dos traces (mapa de serviços) geradas pelo Tempo.
+      - --web.enable-remote-write-receiver
+      - --enable-feature=exemplar-storage
+    volumes:
+      - ./observabilidade/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - dados-prometheus:/prometheus
+    ports:
+      - ${PORTA_PROMETHEUS:-9095}:9090
+
+  # Loki e Tempo guardam dados em /tmp: é um ambiente de demonstração.
+  loki:
+    image: grafana/loki:3.7.8
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./observabilidade/loki.yaml:/etc/loki/config.yaml:ro
+
+  tempo:
+    image: grafana/tempo:2.10.8
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    volumes:
+      - ./observabilidade/tempo.yaml:/etc/tempo/config.yaml:ro
+
+  grafana:
+    image: grafana/grafana:13.2.2
+    environment:
+      # Acesso direto, sem login: ambiente local de demonstração.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/clinix.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./observabilidade/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observabilidade/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - ${PORTA_GRAFANA:-3300}:3000
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+
+  # ── Teste de carga (opcional) ────────────────────────────────────────────
+  # docker compose --profile carga run --rm carga
+  carga:
+    image: grafana/k6:2.3.0
+    profiles: [carga]
+    command: ["run", "/scripts/k6.js"]
+    environment:
+      ALVO: http://web
+    volumes:
+      - ./carga:/scripts:ro
+    depends_on:
+      web:
+        condition: service_started
+
+volumes:
+  dados-postgres:
+  dados-prometheus:
