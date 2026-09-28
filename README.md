@@ -2,8 +2,8 @@
 
 Sobe o Clinix completo com um comando: frontend, API e PostgreSQL, mais uma pilha de observabilidade com **OpenTelemetry, Prometheus, Loki, Tempo e Grafana**, com dashboards versionados e um teste de carga que gera tráfego realista.
 
-- Backend: `clinix-backend` (Node.js, arquitetura em camadas, 170 testes)
-- Frontend: `clinix-frontend` (Angular 22)
+- Backend: [clinix-backend](https://github.com/leorossiio/clinix-backend) (Node.js, arquitetura em camadas, 170 testes)
+- Frontend: [clinix-frontend](https://github.com/leorossiio/clinix-frontend) (Angular 22)
 
 ## Arquitetura
 
@@ -29,7 +29,21 @@ flowchart LR
 
 ## Como rodar
 
-Requisitos: Docker com Compose v2 e os três repositórios lado a lado:
+Requisitos: Docker com Compose v2 e os três repositórios lado a lado.
+
+```bash
+mkdir clinix && cd clinix
+git clone https://github.com/leorossiio/clinix-backend.git
+git clone https://github.com/leorossiio/clinix-frontend.git
+git clone https://github.com/Massayuki2213/clinix-infra.git
+
+# Enquanto os pull requests de PostgreSQL/observabilidade e de Docker não
+# forem mergeados, use as branches deles:
+git -C clinix-backend switch feat/postgres-e-observabilidade
+git -C clinix-frontend switch feat/docker
+```
+
+A estrutura fica assim:
 
 ```
 clinix/
@@ -39,6 +53,7 @@ clinix/
 ```
 
 ```bash
+cd clinix-infra
 cp .env.example .env
 # defina JWT_SECRET no .env (mínimo 32 caracteres)
 
