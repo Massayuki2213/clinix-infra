@@ -1,0 +1,9 @@
+apiVersion: 1
+
+providers:
+  - name: Clinix
+    folder: Clinix
+    type: file
+    disableDeletion: true
+    options:
+      path: /var/lib/grafana/dashboards
